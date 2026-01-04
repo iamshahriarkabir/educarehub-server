@@ -4,32 +4,46 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+
 const app = express();
 const port = process.env.PORT || 5000;
 
-// ==========================================================
-//                  CONFIGURATIONS
-// ==========================================================
+/* ==========================================================
+   MIDDLEWARES
+========================================================== */
 
-// 1. CORS Configuration
-const corsOptions = {
-  origin: [
-    "http://localhost:5173",                            // Local Development
-    "https://educarehub-5b51c.web.app",                 // Firebase Live URL 1
-    "https://educarehub-5b51c.firebaseapp.com"          // Firebase Live URL 2
-  ],
-  credentials: true,
-  optionsSuccessStatus: 200,
-};
+// Trust proxy (Vercel এর জন্য MUST)
+app.set("trust proxy", 1);
 
-app.use(cors(corsOptions));
+// CORS (Firebase + Local)
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://educarehub-5b51c.web.app",
+      "https://educarehub-5b51c.firebaseapp.com",
+    ],
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 app.use(cookieParser());
 
-// 2. Trust Proxy (Crucial for Vercel/Secure Cookies)
-app.set('trust proxy', 1);
+/* ==========================================================
+   COOKIE OPTIONS (🔥 FIXED)
+========================================================== */
 
-// MongoDB URI
+const cookieOptions = {
+  httpOnly: true,
+  secure: true,     // HTTPS required
+  sameSite: "none", // cross-site cookie
+};
+
+/* ==========================================================
+   MONGODB SETUP
+========================================================== */
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@z4tech.as3lfup.mongodb.net/?appName=Z4Tech`;
 
 const client = new MongoClient(uri, {
@@ -40,16 +54,6 @@ const client = new MongoClient(uri, {
   },
 });
 
-// ==========================================================
-//                  COOKIE OPTIONS
-// ==========================================================
-// প্রোডাকশন (Live) এবং লোকাল এনভায়রনমেন্টের জন্য আলাদা সেটিংস
-const cookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production", 
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-};
-
 async function run() {
   try {
     const database = client.db("educareHubDB");
@@ -57,14 +61,16 @@ async function run() {
     const enrollmentCollection = database.collection("enrollments");
     const userCollection = database.collection("users");
 
-    // ==========================================================
-    //                  AUTH MIDDLEWARE
-    // ==========================================================
+    /* ==========================================================
+       AUTH MIDDLEWARE
+    ========================================================== */
+
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
       if (!token) {
         return res.status(401).send({ message: "unauthorized access" });
       }
+
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
           return res.status(401).send({ message: "unauthorized access" });
@@ -74,176 +80,193 @@ async function run() {
       });
     };
 
-    // ==========================================================
-    //                  AUTH ROUTES
-    // ==========================================================
-    
-    // 1. Generate JWT
+    /* ==========================================================
+       AUTH ROUTES
+    ========================================================== */
+
+    // Generate JWT
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
         expiresIn: "365d",
       });
-      res.cookie("token", token, cookieOptions).send({ success: true });
-    });
 
-    // 2. Logout
-    app.post("/logout", async (req, res) => {
       res
-        .clearCookie("token", { ...cookieOptions, maxAge: 0 })
+        .cookie("token", token, cookieOptions)
         .send({ success: true });
     });
 
-    // ==========================================================
-    //                  USER ROUTES
-    // ==========================================================
+    // Logout
+    app.post("/logout", async (req, res) => {
+      res
+        .clearCookie("token", cookieOptions)
+        .send({ success: true });
+    });
+
+    /* ==========================================================
+       USER ROUTES
+    ========================================================== */
+
     app.post("/users", async (req, res) => {
       const user = req.body;
-      const query = { email: user.email };
-      const existingUser = await userCollection.findOne(query);
+      const existingUser = await userCollection.findOne({ email: user.email });
       if (existingUser) {
-        return res.send({ message: "User already exists", insertedId: null });
+        return res.send({ message: "User already exists" });
       }
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
 
     app.get("/users/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      if (email !== req.user.email) {
+      if (req.params.email !== req.user.email) {
         return res.status(403).send({ message: "forbidden access" });
       }
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
+      const user = await userCollection.findOne({ email: req.params.email });
       res.send(user);
     });
 
-    // Admin: Get All Users
     app.get("/users", verifyToken, async (req, res) => {
-      const result = await userCollection.find().toArray();
-      res.send(result);
+      const users = await userCollection.find().toArray();
+      res.send(users);
     });
 
-    // Admin: Change Role
     app.patch("/users/role/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
       const { role } = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const updatedDoc = { $set: { role: role } };
-      const result = await userCollection.updateOne(filter, updatedDoc);
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { role } }
+      );
       res.send(result);
     });
 
-    // ==========================================================
-    //                  COURSE ROUTES
-    // ==========================================================
+    /* ==========================================================
+       COURSE ROUTES (PUBLIC)
+    ========================================================== */
+
     app.get("/courses", async (req, res) => {
       const page = parseInt(req.query.page) || 0;
-      const size = parseInt(req.query.size) || 10;
+      const size = parseInt(req.query.size) || 8;
       const search = req.query.search || "";
       const category = req.query.category || "";
       const sort = req.query.sort || "createdAt";
-      const isFeatured = req.query.featured === "true";
+      const featured = req.query.featured === "true";
 
-      let query = { title: { $regex: search, $options: "i" } };
+      let query = {
+        title: { $regex: search, $options: "i" },
+      };
+
       if (category && category !== "All") query.category = category;
-      if (isFeatured) query.isFeatured = true;
+      if (featured) query.isFeatured = true;
 
-      let sortOptions = { createdAt: -1 };
-      if (sort === "price-asc") sortOptions = { price: 1 };
-      if (sort === "price-desc") sortOptions = { price: -1 };
+      let sortQuery = { createdAt: -1 };
+      if (sort === "price-asc") sortQuery = { price: 1 };
+      if (sort === "price-desc") sortQuery = { price: -1 };
 
-      const cursor = courseCollection
+      const courses = await courseCollection
         .find(query)
-        .sort(sortOptions)
+        .sort(sortQuery)
         .skip(page * size)
-        .limit(size);
+        .limit(size)
+        .toArray();
 
-      const result = await cursor.toArray();
-      res.send(result);
+      res.send(courses);
     });
 
     app.get("/courses-count", async (req, res) => {
       const search = req.query.search || "";
       const category = req.query.category || "";
-      let query = { title: { $regex: search, $options: "i" } };
+
+      let query = {
+        title: { $regex: search, $options: "i" },
+      };
       if (category && category !== "All") query.category = category;
+
       const count = await courseCollection.countDocuments(query);
       res.send({ count });
     });
 
     app.get("/courses/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await courseCollection.findOne(query);
-      res.send(result);
+      const course = await courseCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.send(course);
     });
 
-    // Instructor: My Added Courses
+    /* ==========================================================
+       PROTECTED COURSE ROUTES
+    ========================================================== */
+
     app.get("/my-courses/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      if (email !== req.user.email) return res.status(403).send({ message: "forbidden access" });
-      const query = { instructorEmail: email };
-      const result = await courseCollection.find(query).sort({ createdAt: -1 }).toArray();
+      if (req.params.email !== req.user.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      const result = await courseCollection
+        .find({ instructorEmail: req.params.email })
+        .toArray();
       res.send(result);
     });
 
     app.post("/courses", verifyToken, async (req, res) => {
-      const courseData = req.body;
-      courseData.createdAt = new Date();
-      const result = await courseCollection.insertOne(courseData);
+      const course = { ...req.body, createdAt: new Date() };
+      const result = await courseCollection.insertOne(course);
       res.send(result);
     });
 
     app.put("/courses/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const courseData = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: { ...courseData },
-      };
-      delete updateDoc.$set._id; // Prevent updating ID
-      const result = await courseCollection.updateOne(filter, updateDoc);
+      const { _id, ...rest } = req.body;
+      const result = await courseCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: rest }
+      );
       res.send(result);
     });
 
     app.delete("/courses/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
-      const courseQuery = { _id: new ObjectId(id) };
-      const enrollmentQuery = { courseId: id };
-      const deleteCourseResult = await courseCollection.deleteOne(courseQuery);
-      const deleteEnrollmentsResult = await enrollmentCollection.deleteMany(enrollmentQuery);
-      res.send({ courseDeleteInfo: deleteCourseResult, enrollmentDeleteInfo: deleteEnrollmentsResult });
+      await enrollmentCollection.deleteMany({ courseId: id });
+      const result = await courseCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
     });
 
-    // ==========================================================
-    //                  ENROLLMENT ROUTES
-    // ==========================================================
+    /* ==========================================================
+       ENROLLMENTS
+    ========================================================== */
+
     app.post("/enrollments", verifyToken, async (req, res) => {
-      const enrollmentData = req.body;
-      enrollmentData.enrollmentDate = new Date();
-      const result = await enrollmentCollection.insertOne(enrollmentData);
+      const enrollment = {
+        ...req.body,
+        enrollmentDate: new Date(),
+      };
+      const result = await enrollmentCollection.insertOne(enrollment);
       res.send(result);
     });
 
     app.get("/my-enrollments/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      if (email !== req.user.email) return res.status(403).send({ message: "forbidden access" });
-      const query = { studentEmail: email };
-      const result = await enrollmentCollection.find(query).sort({ enrollmentDate: -1 }).toArray();
+      if (req.params.email !== req.user.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      const result = await enrollmentCollection
+        .find({ studentEmail: req.params.email })
+        .toArray();
       res.send(result);
     });
 
-    // Root
+    /* ==========================================================
+       ROOT
+    ========================================================== */
+
     app.get("/", (req, res) => {
-      res.send("EducareHub Server is running...");
+      res.send("EducareHub Server is running 🚀");
     });
 
     app.listen(port, () => {
       console.log(`Server running on port ${port}`);
     });
-  } finally {
-    //
+  } catch (error) {
+    console.error(error);
   }
 }
-run().catch(console.dir);
+
+run();
