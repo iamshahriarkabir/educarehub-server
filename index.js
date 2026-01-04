@@ -235,7 +235,7 @@ async function run() {
     //    ROOT ROUTE
     // ==========================================================
     app.get("/", (req, res) => {
-      res.send("EducareHub Server is running...");
+      res.send(`Server is running! Node Environment: ${process.env.NODE_ENV}`);
     });
 
     app.listen(port, () => {
