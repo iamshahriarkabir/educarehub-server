@@ -7,36 +7,35 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 5000;
 
+// ==========================================================
+//                  CORS & MIDDLEWARE CONFIG
+// ==========================================================
 
+// অনুমোদিত ডোমেইনের তালিকা
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://educarehub-5b51c.web.app",
+  "https://educarehub-5b51c.firebaseapp.com"
+];
 
+// CORS Middleware
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // origin না থাকলে (যেমন পোস্টম্যান) অথবা allowed লিস্টে থাকলে অনুমতি দাও
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // কুকি আদান-প্রদানের জন্য জরুরি
+    optionsSuccessStatus: 200,
+  })
+);
 
-const app = express();
-const port = process.env.PORT || 5000;
-
-// Middleware
-const corsOptions = {
-  origin: (origin, callback) => {
-    // !origin allows requests from non-browser sources (like Postman) or same-origin
-    if (!origin || [
-      "http://localhost:5173",
-      "https://educarehub-5b51c.web.app",
-      "https://educarehub-5b51c.firebaseapp.com"
-    ].includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log("Blocked by CORS:", origin); // ডিবাগিং এর জন্য
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-};
-
-app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
-
 
 // MongoDB Connection URI
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@z4tech.as3lfup.mongodb.net/?appName=Z4Tech`;
@@ -61,7 +60,6 @@ async function run() {
     //                  AUTH & SECURITY MIDDLEWARE
     // ==========================================================
 
-    // Custom Middleware: Verify Token
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
       if (!token) {
@@ -76,7 +74,7 @@ async function run() {
       });
     };
 
-    // 1. Create JWT Token
+    // 1. JWT Token Create
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -86,8 +84,8 @@ async function run() {
       res
         .cookie("token", token, {
           httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          secure: true, // প্রডাকশনে অবশ্যই true হতে হবে
+          sameSite: "none", // ক্রস-ডোমেইনের জন্য অবশ্যই "none" হতে হবে
         })
         .send({ success: true });
     });
@@ -97,17 +95,16 @@ async function run() {
       res
         .clearCookie("token", {
           maxAge: 0,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          secure: true,
+          sameSite: "none",
         })
         .send({ success: true });
     });
 
     // ==========================================================
-    //                     USER API (UPDATED)
+    //                     USER API
     // ==========================================================
 
-    // Save User (Register)
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -119,7 +116,6 @@ async function run() {
       res.send(result);
     });
 
-    // Get User Role (For Hooks)
     app.get("/users/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (email !== req.user.email) {
@@ -130,21 +126,19 @@ async function run() {
       res.send(user);
     });
 
-    // --- NEW: Get All Users (Admin Only - simplified logic for now) ---
+    // Admin: Get All Users
     app.get("/users", verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
 
-    // --- NEW: Update User Role (Make Admin/Instructor) ---
+    // Admin: Update Role
     app.patch("/users/role/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
       const filter = { _id: new ObjectId(id) };
       const updatedDoc = {
-        $set: {
-          role: role,
-        },
+        $set: { role: role },
       };
       const result = await userCollection.updateOne(filter, updatedDoc);
       res.send(result);
@@ -154,7 +148,6 @@ async function run() {
     //                     COURSE API
     // ==========================================================
 
-    // GET all courses
     app.get("/courses", async (req, res) => {
       const page = parseInt(req.query.page) || 0;
       const size = parseInt(req.query.size) || 10;
@@ -167,12 +160,8 @@ async function run() {
         title: { $regex: search, $options: "i" },
       };
 
-      if (category && category !== "All") {
-        query.category = category;
-      }
-      if (isFeatured) {
-        query.isFeatured = true;
-      }
+      if (category && category !== "All") query.category = category;
+      if (isFeatured) query.isFeatured = true;
 
       let sortOptions = { createdAt: -1 };
       if (sort === "price-asc") sortOptions = { price: 1 };
@@ -188,23 +177,15 @@ async function run() {
       res.send(result);
     });
 
-    // GET Total Count
     app.get("/courses-count", async (req, res) => {
       const search = req.query.search || "";
       const category = req.query.category || "";
-
-      let query = {
-        title: { $regex: search, $options: "i" },
-      };
-      if (category && category !== "All") {
-        query.category = category;
-      }
-      
+      let query = { title: { $regex: search, $options: "i" } };
+      if (category && category !== "All") query.category = category;
       const count = await courseCollection.countDocuments(query);
       res.send({ count });
     });
 
-    // GET single course
     app.get("/courses/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -212,21 +193,14 @@ async function run() {
       res.send(result);
     });
 
-    // GET my added courses
     app.get("/my-courses/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      if (email !== req.user.email) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
+      if (email !== req.user.email) return res.status(403).send({ message: "forbidden access" });
       const query = { instructorEmail: email };
-      const result = await courseCollection
-        .find(query)
-        .sort({ createdAt: -1 })
-        .toArray();
+      const result = await courseCollection.find(query).sort({ createdAt: -1 }).toArray();
       res.send(result);
     });
 
-    // POST new course
     app.post("/courses", verifyToken, async (req, res) => {
       const courseData = req.body;
       courseData.createdAt = new Date();
@@ -234,7 +208,6 @@ async function run() {
       res.send(result);
     });
 
-    // UPDATE course
     app.put("/courses/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const courseData = req.body;
@@ -254,21 +227,13 @@ async function run() {
       res.send(result);
     });
 
-    // DELETE course
     app.delete("/courses/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const courseQuery = { _id: new ObjectId(id) };
       const enrollmentQuery = { courseId: id };
-
       const deleteCourseResult = await courseCollection.deleteOne(courseQuery);
-      const deleteEnrollmentsResult = await enrollmentCollection.deleteMany(
-        enrollmentQuery
-      );
-
-      res.send({
-        courseDeleteInfo: deleteCourseResult,
-        enrollmentDeleteInfo: deleteEnrollmentsResult,
-      });
+      const deleteEnrollmentsResult = await enrollmentCollection.deleteMany(enrollmentQuery);
+      res.send({ courseDeleteInfo: deleteCourseResult, enrollmentDeleteInfo: deleteEnrollmentsResult });
     });
 
     // ==========================================================
@@ -284,14 +249,9 @@ async function run() {
 
     app.get("/my-enrollments/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      if (email !== req.user.email) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
+      if (email !== req.user.email) return res.status(403).send({ message: "forbidden access" });
       const query = { studentEmail: email };
-      const result = await enrollmentCollection
-        .find(query)
-        .sort({ enrollmentDate: -1 })
-        .toArray();
+      const result = await enrollmentCollection.find(query).sort({ enrollmentDate: -1 }).toArray();
       res.send(result);
     });
 
@@ -308,5 +268,3 @@ async function run() {
   }
 }
 run().catch(console.dir);
-
-
