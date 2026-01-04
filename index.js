@@ -8,19 +8,35 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 
+
+
+const app = express();
+const port = process.env.PORT || 5000;
+
 // Middleware
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",                            // লোকাল ডেভেলপমেন্টের জন্য
-      "https://educarehub-5b51c.web.app",                 // আপনার Firebase লাইভ সাইট ১
-      "https://educarehub-5b51c.firebaseapp.com",         // আপনার Firebase লাইভ সাইট ২
-    ],
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // !origin allows requests from non-browser sources (like Postman) or same-origin
+    if (!origin || [
+      "http://localhost:5173",
+      "https://educarehub-5b51c.web.app",
+      "https://educarehub-5b51c.firebaseapp.com"
+    ].includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log("Blocked by CORS:", origin); // ডিবাগিং এর জন্য
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 200,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
+
 
 // MongoDB Connection URI
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@z4tech.as3lfup.mongodb.net/?appName=Z4Tech`;
