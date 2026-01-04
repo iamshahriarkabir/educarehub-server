@@ -8,32 +8,20 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // ==========================================================
-//                  CORS & MIDDLEWARE CONFIG
+//                  CORS CONFIGURATION (FIXED)
 // ==========================================================
 
-// অনুমোদিত ডোমেইনের তালিকা
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://educarehub-5b51c.web.app",
-  "https://educarehub-5b51c.firebaseapp.com"
-];
+const corsOptions = {
+  origin: [
+    "http://localhost:5173",
+    "https://educarehub-5b51c.web.app",
+    "https://educarehub-5b51c.firebaseapp.com",
+  ],
+  credentials: true,
+  optionSuccessStatus: 200,
+};
 
-// CORS Middleware
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // origin না থাকলে (যেমন পোস্টম্যান) অথবা allowed লিস্টে থাকলে অনুমতি দাও
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true, // কুকি আদান-প্রদানের জন্য জরুরি
-    optionsSuccessStatus: 200,
-  })
-);
-
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -50,7 +38,6 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // --- Database Collections ---
     const database = client.db("educareHubDB");
     const courseCollection = database.collection("courses");
     const enrollmentCollection = database.collection("enrollments");
@@ -74,7 +61,7 @@ async function run() {
       });
     };
 
-    // 1. JWT Token Create
+    // 1. Create JWT Token
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -84,8 +71,8 @@ async function run() {
       res
         .cookie("token", token, {
           httpOnly: true,
-          secure: true, // প্রডাকশনে অবশ্যই true হতে হবে
-          sameSite: "none", // ক্রস-ডোমেইনের জন্য অবশ্যই "none" হতে হবে
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         })
         .send({ success: true });
     });
@@ -95,8 +82,8 @@ async function run() {
       res
         .clearCookie("token", {
           maxAge: 0,
-          secure: true,
-          sameSite: "none",
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         })
         .send({ success: true });
     });
@@ -126,20 +113,16 @@ async function run() {
       res.send(user);
     });
 
-    // Admin: Get All Users
     app.get("/users", verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
 
-    // Admin: Update Role
     app.patch("/users/role/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
       const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: { role: role },
-      };
+      const updatedDoc = { $set: { role: role } };
       const result = await userCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
@@ -156,10 +139,7 @@ async function run() {
       const sort = req.query.sort || "createdAt";
       const isFeatured = req.query.featured === "true";
 
-      let query = {
-        title: { $regex: search, $options: "i" },
-      };
-
+      let query = { title: { $regex: search, $options: "i" } };
       if (category && category !== "All") query.category = category;
       if (isFeatured) query.isFeatured = true;
 
