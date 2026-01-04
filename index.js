@@ -8,24 +8,28 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // ==========================================================
-//                  CORS CONFIGURATION (FIXED)
+//                  CONFIGURATIONS
 // ==========================================================
 
+// 1. CORS Configuration
 const corsOptions = {
   origin: [
-    "http://localhost:5173",
-    "https://educarehub-5b51c.web.app",
-    "https://educarehub-5b51c.firebaseapp.com",
+    "http://localhost:5173",                            // Local Development
+    "https://educarehub-5b51c.web.app",                 // Firebase Live URL 1
+    "https://educarehub-5b51c.firebaseapp.com"          // Firebase Live URL 2
   ],
   credentials: true,
-  optionSuccessStatus: 200,
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
-// MongoDB Connection URI
+// 2. Trust Proxy (Crucial for Vercel/Secure Cookies)
+app.set('trust proxy', 1);
+
+// MongoDB URI
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@z4tech.as3lfup.mongodb.net/?appName=Z4Tech`;
 
 const client = new MongoClient(uri, {
@@ -36,6 +40,16 @@ const client = new MongoClient(uri, {
   },
 });
 
+// ==========================================================
+//                  COOKIE OPTIONS
+// ==========================================================
+// প্রোডাকশন (Live) এবং লোকাল এনভায়রনমেন্টের জন্য আলাদা সেটিংস
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production", 
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+};
+
 async function run() {
   try {
     const database = client.db("educareHubDB");
@@ -44,9 +58,8 @@ async function run() {
     const userCollection = database.collection("users");
 
     // ==========================================================
-    //                  AUTH & SECURITY MIDDLEWARE
+    //                  AUTH MIDDLEWARE
     // ==========================================================
-
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
       if (!token) {
@@ -61,37 +74,29 @@ async function run() {
       });
     };
 
-    // 1. Create JWT Token
+    // ==========================================================
+    //                  AUTH ROUTES
+    // ==========================================================
+    
+    // 1. Generate JWT
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: "1h",
+        expiresIn: "365d",
       });
-
-      res
-        .cookie("token", token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        })
-        .send({ success: true });
+      res.cookie("token", token, cookieOptions).send({ success: true });
     });
 
     // 2. Logout
     app.post("/logout", async (req, res) => {
       res
-        .clearCookie("token", {
-          maxAge: 0,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        })
+        .clearCookie("token", { ...cookieOptions, maxAge: 0 })
         .send({ success: true });
     });
 
     // ==========================================================
-    //                     USER API
+    //                  USER ROUTES
     // ==========================================================
-
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -113,11 +118,13 @@ async function run() {
       res.send(user);
     });
 
+    // Admin: Get All Users
     app.get("/users", verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
 
+    // Admin: Change Role
     app.patch("/users/role/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
@@ -128,9 +135,8 @@ async function run() {
     });
 
     // ==========================================================
-    //                     COURSE API
+    //                  COURSE ROUTES
     // ==========================================================
-
     app.get("/courses", async (req, res) => {
       const page = parseInt(req.query.page) || 0;
       const size = parseInt(req.query.size) || 10;
@@ -173,6 +179,7 @@ async function run() {
       res.send(result);
     });
 
+    // Instructor: My Added Courses
     app.get("/my-courses/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (email !== req.user.email) return res.status(403).send({ message: "forbidden access" });
@@ -193,16 +200,9 @@ async function run() {
       const courseData = req.body;
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set: {
-          title: courseData.title,
-          imageUrl: courseData.imageUrl,
-          price: courseData.price,
-          duration: courseData.duration,
-          category: courseData.category,
-          description: courseData.description,
-          isFeatured: courseData.isFeatured,
-        },
+        $set: { ...courseData },
       };
+      delete updateDoc.$set._id; // Prevent updating ID
       const result = await courseCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
@@ -217,9 +217,8 @@ async function run() {
     });
 
     // ==========================================================
-    //                  ENROLLMENT API
+    //                  ENROLLMENT ROUTES
     // ==========================================================
-
     app.post("/enrollments", verifyToken, async (req, res) => {
       const enrollmentData = req.body;
       enrollmentData.enrollmentDate = new Date();
@@ -235,16 +234,16 @@ async function run() {
       res.send(result);
     });
 
-    // Root endpoint
+    // Root
     app.get("/", (req, res) => {
-      res.send("EducareHub Server is running!");
+      res.send("EducareHub Server is running...");
     });
 
     app.listen(port, () => {
-      console.log(`EducareHub Server is running on port ${port}`);
+      console.log(`Server running on port ${port}`);
     });
   } finally {
-    // await client.close();
+    //
   }
 }
 run().catch(console.dir);
